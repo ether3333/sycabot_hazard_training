@@ -1,7 +1,9 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import pygame
+
+from environment_configs import get_lab_environment_config
+from sycabot_render import SycaBotRenderer
 
 
 class SycaBotEnv(gym.Env):
@@ -14,9 +16,20 @@ class SycaBotEnv(gym.Env):
         num_tasks=2,
         max_steps=1000,
         fire_spread_prob=0.020,
-        fire_kill_prob=0.5,
+        fire_kill_prob=0.2,
         fire_cell_size=0.08,
         robot_radius=0.08,
+        pickup_reward=500.0,
+        delivery_reward=500.0,
+        smooth_action_weight=0.30,
+        turn_smooth_weight=0.20,
+        jerk_weight=0.08,
+        direction_flip_weight=0.10,
+        boundary_death_penalty=20.0,
+        task_progress_reward_weight=10.0,
+        exit_progress_reward_weight=10.0,
+        environment_config=None,
+        renderer=None,
     ):
         super().__init__()
 
@@ -30,9 +43,16 @@ class SycaBotEnv(gym.Env):
         self.v_min, self.v_max = -0.20, 0.20
         self.w_min, self.w_max = -np.pi / 6.0, np.pi / 6.0
 
+        if environment_config is None:
+            environment_config = get_lab_environment_config()
+
+        bounds = environment_config["bounds"]
+
         # Workspace
-        self.x_min, self.x_max = -1.55, 1.55
-        self.y_min, self.y_max = -3.10, 3.10
+        self.x_min = float(bounds["x_min"])
+        self.x_max = float(bounds["x_max"])
+        self.y_min = float(bounds["y_min"])
+        self.y_max = float(bounds["y_max"])
         self.robot_radius = float(robot_radius)
         self.collision_distance = 2.0 * self.robot_radius
 
@@ -40,10 +60,19 @@ class SycaBotEnv(gym.Env):
         self.fire_spread_prob = float(fire_spread_prob)
         self.fire_kill_prob = float(fire_kill_prob)
         self.fire_cell_size = float(fire_cell_size)
+        self.pickup_reward = float(pickup_reward)
+        self.delivery_reward = float(delivery_reward)
+        self.smooth_action_weight = float(smooth_action_weight)
+        self.turn_smooth_weight = float(turn_smooth_weight)
+        self.jerk_weight = float(jerk_weight)
+        self.direction_flip_weight = float(direction_flip_weight)
+        self.boundary_death_penalty = float(boundary_death_penalty)
+        self.task_progress_reward_weight = float(task_progress_reward_weight)
+        self.exit_progress_reward_weight = float(exit_progress_reward_weight)
 
         # Environment geometry
-        self.obstacles = self._add_obstacles()
-        self.exits = self._add_exits()
+        self.obstacles = environment_config["obstacles"]
+        self.exits = np.array(environment_config["exits"], dtype=np.float32)
         self.grid_shape = self._grid_shape_from_bounds()
 
         # Action is joint action [v1,w1,v2,w2,...]
@@ -81,53 +110,15 @@ class SycaBotEnv(gym.Env):
 
         self.global_safety_indicator = 1.0
         self.global_task_indicator = 0.0  # 0 none, 1 picked, 2 delivered
-        self.prev_task_dist = 0.0
-        self.prev_exit_dist = 0.0
+        self.prev_visible_task_dist = np.full(self.num_robots, np.nan, dtype=np.float32)
+        self.prev_visible_exit_dist = np.full(self.num_robots, np.nan, dtype=np.float32)
+        self.prev_joint_action = np.zeros(2 * self.num_robots, dtype=np.float32)
+        self.prev_prev_joint_action = np.zeros(2 * self.num_robots, dtype=np.float32)
 
         self.step_count = 0
 
         # Render
-        self.window = None
-        self.clock = None
-        self.screen_size = 800
-
-    def _add_obstacles(self):
-        return [
-            [[-1.498, 3.001], [0.001, 3.000]],
-            [[1.051, 3.001], [1.494, 3.000]],
-            [[1.494, 3.000], [1.493, 0.430]],
-            [[1.494, -0.374], [1.497, -2.998]],
-            [[0.002, -2.999], [1.497, -2.998]],
-            [[-1.498, -2.999], [-1.047, -2.999]],
-            [[-1.496, -0.500], [-1.498, -2.999]],
-            [[-1.496, 0.750], [-1.495, 0.299]],
-            [[-1.498, 2.998], [-1.498, 1.553]],
-            [[-0.481, 2.382], [0.879, 1.356]],
-            [[-1.498, 1.553], [-0.700, 1.551]],
-            [[1.018, 0.429], [1.493, 0.430]],
-            [[0.141, 1.040], [-0.269, 0.524]],
-            [[-1.496, 0.526], [-0.269, 0.524]],
-            [[-0.269, 0.524], [-0.261, -0.008]],
-            [[-0.261, -0.008], [0.480, -0.008]],
-            [[0.011, -0.008], [0.011, -0.486]],
-            [[-1.496, -0.859], [-0.492, -0.860]],
-            [[0.922, -0.613], [0.924, -2.093]],
-            [[0.260, -1.084], [0.260, -2.093]],
-            [[-0.665, -2.094], [0.924, -2.093]],
-            [[-0.685, -2.103], [-0.931, -2.414]],
-        ]
-
-    def _add_exits(self):
-        return np.array(
-            [
-                [-1.497, 1.1515],
-                [-1.4945, -0.1005],
-                [-0.524, -2.999],
-                [1.4955, 0.028],
-                [0.526, 3.001],
-            ],
-            dtype=np.float32,
-        )
+        self.renderer = renderer if renderer is not None else SycaBotRenderer()
 
     def _grid_shape_from_bounds(self):
         width = self.x_max - self.x_min
@@ -157,6 +148,41 @@ class SycaBotEnv(gym.Env):
         t = np.clip(np.dot(p - a, ab) / denom, 0.0, 1.0)
         proj = a + t * ab
         return float(np.linalg.norm(p - proj))
+
+    def _orientation(self, a, b, c):
+        return float((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+
+    def _on_segment(self, a, b, c, eps=1e-6):
+        return (
+            min(a[0], b[0]) - eps <= c[0] <= max(a[0], b[0]) + eps
+            and min(a[1], b[1]) - eps <= c[1] <= max(a[1], b[1]) + eps
+        )
+
+    def _segments_intersect(self, p1, p2, q1, q2, eps=1e-6):
+        o1 = self._orientation(p1, p2, q1)
+        o2 = self._orientation(p1, p2, q2)
+        o3 = self._orientation(q1, q2, p1)
+        o4 = self._orientation(q1, q2, p2)
+
+        if o1 * o2 < -eps and o3 * o4 < -eps:
+            return True
+        if abs(o1) <= eps and self._on_segment(p1, p2, q1, eps):
+            return True
+        if abs(o2) <= eps and self._on_segment(p1, p2, q2, eps):
+            return True
+        if abs(o3) <= eps and self._on_segment(q1, q2, p1, eps):
+            return True
+        if abs(o4) <= eps and self._on_segment(q1, q2, p2, eps):
+            return True
+        return False
+
+    def _has_clear_line_of_sight(self, start_point, end_point):
+        start = np.array(start_point, dtype=np.float32)
+        end = np.array(end_point, dtype=np.float32)
+        for obstacle in self.obstacles:
+            if self._segments_intersect(start, end, obstacle[0], obstacle[1]):
+                return False
+        return True
 
     def _is_obstacle_collision(self, point):
         for segment in self.obstacles:
@@ -221,12 +247,34 @@ class SycaBotEnv(gym.Env):
         d = np.linalg.norm(self.exits - point, axis=1)
         return float(np.min(d))
 
+    def _nearest_visible_exit_distance(self, point):
+        visible_distances = []
+        for exit_point in self.exits:
+            if self._has_clear_line_of_sight(point, exit_point):
+                visible_distances.append(float(np.linalg.norm(exit_point - point)))
+        if not visible_distances:
+            return None
+        return min(visible_distances)
+
     def _nearest_task_distance(self, point):
         pending_idx = np.where(self.task_status == 0)[0]
         if len(pending_idx) == 0:
             return 0.0
         d = np.linalg.norm(self.tasks[pending_idx] - point, axis=1)
         return float(np.min(d))
+
+    def _nearest_visible_task_distance(self, point):
+        pending_idx = np.where(self.task_status == 0)[0]
+        if len(pending_idx) == 0:
+            return None
+        visible_distances = []
+        for idx in pending_idx:
+            task_point = self.tasks[idx]
+            if self._has_clear_line_of_sight(point, task_point):
+                visible_distances.append(float(np.linalg.norm(task_point - point)))
+        if not visible_distances:
+            return None
+        return min(visible_distances)
 
     def _nearest_fire_distance(self, point):
         burning = np.argwhere(self.fire_grid > 0)
@@ -292,16 +340,31 @@ class SycaBotEnv(gym.Env):
 
     def _check_robot_failures(self):
         safety_events = 0
+        obstacle_hits = 0
+        boundary_deaths = 0
+        obstacle_deaths = 0
+        mutual_collision_deaths = 0
+        fire_deaths = 0
 
-        # Boundary + obstacle
+        # Boundary failure
         for i in range(self.num_robots):
             if self.robot_alive[i] < 0.5:
                 continue
             p = self.robot_states[i, :2]
-            if self._is_out_of_boundary(p) or self._is_obstacle_collision(p):
+            if self._is_out_of_boundary(p):
                 self.robot_alive[i] = 0.0
                 self.robot_safety[i] = 0.0
                 safety_events += 1
+                boundary_deaths += 1
+                continue
+
+            # Obstacle contact destroys the robot
+            if self._is_obstacle_collision(p):
+                self.robot_alive[i] = 0.0
+                self.robot_safety[i] = 0.0
+                obstacle_hits += 1
+                safety_events += 1
+                obstacle_deaths += 1
 
         # Mutual collisions
         for i in range(self.num_robots):
@@ -317,6 +380,7 @@ class SycaBotEnv(gym.Env):
                     self.robot_safety[i] = 0.0
                     self.robot_safety[j] = 0.0
                     safety_events += 2
+                    mutual_collision_deaths += 2
 
         # Fire kill zone
         fire_radius = 0.5 * np.sqrt(2.0) * self.fire_cell_size + self.robot_radius
@@ -342,8 +406,9 @@ class SycaBotEnv(gym.Env):
                 self.robot_alive[i] = 0.0
                 self.robot_safety[i] = 0.0
                 safety_events += 1
+                fire_deaths += 1
 
-        if safety_events > 0:
+        if safety_events > 0 or obstacle_hits > 0:
             self.global_safety_indicator = 0.0
 
         # Drop carried tasks for destroyed robots (task becomes contaminated)
@@ -357,7 +422,7 @@ class SycaBotEnv(gym.Env):
                     self.task_carrier[tid] = -1
                     self.robot_carrying[i] = 0.0
 
-        return safety_events
+        return safety_events, obstacle_hits, boundary_deaths, obstacle_deaths, mutual_collision_deaths, fire_deaths
 
     def _update_task_logic(self):
         picked_count = 0
@@ -406,25 +471,33 @@ class SycaBotEnv(gym.Env):
         return picked_count, delivered_count
 
     def _helper_progress_terms(self):
-        task_d = 0.0
-        exit_d = 0.0
+        progress_task = 0.0
+        progress_exit = 0.0
 
-        # Distances for searching robots to pending tasks
-        pending = np.where(self.task_status == 0)[0]
         for i in range(self.num_robots):
             if self.robot_alive[i] < 0.5:
+                self.prev_visible_task_dist[i] = np.nan
+                self.prev_visible_exit_dist[i] = np.nan
                 continue
+
             p = self.robot_states[i, :2]
-            if self.robot_carrying[i] < 0.5 and len(pending) > 0:
-                task_d += self._nearest_task_distance(p)
-            if self.robot_carrying[i] > 0.5:
-                exit_d += self._nearest_exit_distance(p)
 
-        progress_task = self.prev_task_dist - task_d
-        progress_exit = self.prev_exit_dist - exit_d
-
-        self.prev_task_dist = task_d
-        self.prev_exit_dist = exit_d
+            if self.robot_carrying[i] < 0.5:
+                self.prev_visible_exit_dist[i] = np.nan
+                visible_task_distance = self._nearest_visible_task_distance(p)
+                if visible_task_distance is not None and np.isfinite(self.prev_visible_task_dist[i]):
+                    progress_task += max(float(self.prev_visible_task_dist[i]) - visible_task_distance, 0.0)
+                self.prev_visible_task_dist[i] = (
+                    np.float32(visible_task_distance) if visible_task_distance is not None else np.nan
+                )
+            else:
+                self.prev_visible_task_dist[i] = np.nan
+                visible_exit_distance = self._nearest_visible_exit_distance(p)
+                if visible_exit_distance is not None and np.isfinite(self.prev_visible_exit_dist[i]):
+                    progress_exit += max(float(self.prev_visible_exit_dist[i]) - visible_exit_distance, 0.0)
+                self.prev_visible_exit_dist[i] = (
+                    np.float32(visible_exit_distance) if visible_exit_distance is not None else np.nan
+                )
 
         return progress_task, progress_exit
 
@@ -475,27 +548,72 @@ class SycaBotEnv(gym.Env):
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         if action.shape[0] != self.action_space.shape[0]:
             raise ValueError(f"Expected action shape {self.action_space.shape}, got {action.shape}")
+        clipped_action = np.clip(action, self.action_space.low, self.action_space.high).astype(np.float32)
 
         self.step_count += 1
 
-        self._apply_robot_motion(action)
+        self._apply_robot_motion(clipped_action)
         self._propagate_fire()
 
-        safety_events = self._check_robot_failures()
+        (
+            safety_events,
+            obstacle_hits,
+            boundary_deaths,
+            obstacle_deaths,
+            mutual_collision_deaths,
+            fire_deaths,
+        ) = self._check_robot_failures()
         self._update_task_contamination()
         picked_count, delivered_count = self._update_task_logic()
 
         progress_task, progress_exit = self._helper_progress_terms()
-        spread = self._spread_reward()
+
+        # Smoothness shaping to avoid oscillatory back-and-forth motion.
+        v_curr = clipped_action[0::2]
+        w_curr = clipped_action[1::2]
+        v_prev = self.prev_joint_action[0::2]
+        w_prev = self.prev_joint_action[1::2]
+        dv = v_curr - v_prev
+        dw = w_curr - w_prev
+        action_smooth_penalty = self.smooth_action_weight * float(np.mean(dv * dv))
+        turn_smooth_penalty = self.turn_smooth_weight * float(np.mean(dw * dw))
+        jerk = clipped_action - 2.0 * self.prev_joint_action + self.prev_prev_joint_action
+        jerk_penalty = self.jerk_weight * float(np.mean(jerk * jerk))
+        flips = np.logical_and(v_curr * v_prev < 0.0, np.minimum(np.abs(v_curr), np.abs(v_prev)) > 0.03)
+        direction_flip_penalty = self.direction_flip_weight * float(np.sum(flips))
+
+        smooth_penalty = -(action_smooth_penalty + turn_smooth_penalty + jerk_penalty + direction_flip_penalty)
+
+        pickup_reward_component = self.pickup_reward * picked_count
+        delivery_reward_component = self.delivery_reward * delivered_count
+        progress_reward_component = (
+            self.task_progress_reward_weight * progress_task
+            + self.exit_progress_reward_weight * progress_exit
+        )
+        boundary_penalty_component = self.boundary_death_penalty * boundary_deaths
+        total_robot_failures = boundary_deaths + obstacle_deaths + mutual_collision_deaths + fire_deaths
+        all_robot_failure = total_robot_failures >= self.num_robots
 
         reward = 0.0
-        reward += -1.0 * safety_events
-        reward += 1.0 * picked_count
-        reward += 2.0 * delivered_count
-        reward += 0.25 * progress_task
-        reward += 0.35 * progress_exit
-        reward += 0.05 * spread
+        reward += -3.0 * safety_events
+        # reward += -1.0 * obstacle_hits
+        # reward += -boundary_penalty_component
+        reward += pickup_reward_component
+        reward += delivery_reward_component
+        reward += progress_reward_component
+        reward += smooth_penalty
         reward += -0.01
+
+        if all_robot_failure:
+            reward = -200.0
+            pickup_reward_component = 0.0
+            delivery_reward_component = 0.0
+            progress_reward_component = 0.0
+            boundary_penalty_component = 200.0
+            smooth_penalty = 0.0
+
+        self.prev_prev_joint_action = self.prev_joint_action.copy()
+        self.prev_joint_action = clipped_action.copy()
 
         all_tasks_contaminated = bool(np.all(self.task_status == 3))
         all_robots_destroyed = np.all(self.robot_alive < 0.5)
@@ -513,6 +631,17 @@ class SycaBotEnv(gym.Env):
             "carried_tasks": int(np.sum(self.task_status == 1)),
             "delivered_tasks": int(np.sum(self.task_status == 2)),
             "contaminated_tasks": int(np.sum(self.task_status == 3)),
+            "obstacle_hits": int(obstacle_hits),
+            "boundary_deaths": int(boundary_deaths),
+            "obstacle_deaths": int(obstacle_deaths),
+            "mutual_collision_deaths": int(mutual_collision_deaths),
+            "fire_deaths": int(fire_deaths),
+            "action_smooth_penalty": float(-smooth_penalty),
+            "reward_progress": float(progress_reward_component),
+            "reward_pickup": float(pickup_reward_component),
+            "reward_delivery": float(delivery_reward_component),
+            "penalty_boundary_death": float(boundary_penalty_component),
+            "reward_override_all_robot_failure": bool(all_robot_failure),
             "safety_indicator": float(self.global_safety_indicator),
             "task_indicator": float(self.global_task_indicator),
         }
@@ -551,82 +680,21 @@ class SycaBotEnv(gym.Env):
         self.global_safety_indicator = 1.0
         self.global_task_indicator = 0.0
 
-        self.prev_task_dist = 0.0
-        self.prev_exit_dist = 0.0
+        self.prev_visible_task_dist = np.full(self.num_robots, np.nan, dtype=np.float32)
+        self.prev_visible_exit_dist = np.full(self.num_robots, np.nan, dtype=np.float32)
+        self.prev_joint_action = np.zeros(2 * self.num_robots, dtype=np.float32)
+        self.prev_prev_joint_action = np.zeros(2 * self.num_robots, dtype=np.float32)
         _ = self._helper_progress_terms()
 
         return self._build_observation(), {}
 
-    def _to_screen(self, point):
-        x, y = point
-        sx = int((x - self.x_min) / (self.x_max - self.x_min) * self.screen_size)
-        sy = int((self.y_max - y) / (self.y_max - self.y_min) * self.screen_size)
-        return sx, sy
-
     def render(self):
         if self.render_mode != "human":
             return
-
-        if self.window is None:
-            pygame.init()
-            self.window = pygame.display.set_mode((self.screen_size, self.screen_size))
-        if self.clock is None:
-            self.clock = pygame.time.Clock()
-
-        self.window.fill((245, 245, 245))
-
-        # Fire cells
-        for gx in range(self.grid_shape[0]):
-            for gy in range(self.grid_shape[1]):
-                if self.fire_grid[gx, gy] <= 0:
-                    continue
-                c = self._grid_to_world_center(gx, gy)
-                px, py = self._to_screen(c)
-                half = int(0.5 * self.fire_cell_size / (self.x_max - self.x_min) * self.screen_size)
-                rect = pygame.Rect(px - half, py - half, 2 * half, 2 * half)
-                pygame.draw.rect(self.window, (255, 120, 50), rect)
-
-        # Obstacles
-        for obstacle in self.obstacles:
-            start = self._to_screen(obstacle[0])
-            end = self._to_screen(obstacle[1])
-            pygame.draw.line(self.window, (20, 20, 20), start, end, 4)
-
-        # Exits
-        for p in self.exits:
-            pygame.draw.circle(self.window, (40, 180, 40), self._to_screen(p), 8)
-
-        # Tasks
-        for i in range(self.num_tasks):
-            color = (0, 120, 255)
-            if self.task_status[i] == 2:
-                color = (0, 200, 80)
-            elif self.task_status[i] == 3:
-                color = (180, 60, 60)
-            pygame.draw.circle(self.window, color, self._to_screen(self.tasks[i]), 6)
-
-        # Robots
-        for i in range(self.num_robots):
-            x, y, th = self.robot_states[i]
-            if self.robot_alive[i] > 0.5:
-                color = (50, 50, 220)
-                if self.robot_carrying[i] > 0.5:
-                    color = (150, 40, 220)
-            else:
-                color = (90, 90, 90)
-            center = self._to_screen((x, y))
-            pygame.draw.circle(self.window, color, center, 8)
-            head = (int(center[0] + 14 * np.cos(th)), int(center[1] - 14 * np.sin(th)))
-            pygame.draw.line(self.window, (255, 255, 255), center, head, 2)
-
-        pygame.display.flip()
-        self.clock.tick(self.metadata["render_fps"])
+        self.renderer.render(self)
 
     def close(self):
-        if self.window is not None:
-            pygame.quit()
-            self.window = None
-            self.clock = None
+        self.renderer.close()
 
     @staticmethod
     def wrap_angle(theta):
