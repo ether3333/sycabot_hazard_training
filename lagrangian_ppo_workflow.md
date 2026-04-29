@@ -55,6 +55,7 @@ where `J_Cᵢ(π)` is the estimated expected discounted cost under the current p
 | Pickup reward | Primary task performance metric |
 | Delivery reward | Primary task performance metric |
 | Task / exit progress shaping | Dense guidance toward task completion |
+| Action / turn smoothness + jerk + direction-flip penalty | Motion quality; stays in reward so the gradient always shapes action selection |
 | Time step penalty | Encourages efficiency |
 
 ### Constraint candidates (move to cost signals)
@@ -64,7 +65,6 @@ where `J_Cᵢ(π)` is the estimated expected discounted cost under the current p
 | **`cost_safety`** — total safety events per step (boundary + obstacle + inter-robot + fire deaths) | Robots should not be destroyed. Budget of 0 means zero tolerance; a small positive budget (e.g., 0.05 per episode) allows occasional learning failures during exploration. | 0.05 (expected deaths per episode) |
 | **`cost_fire_death`** — fire-related deaths only | Fire is the primary environmental hazard and warrants its own constraint, tighter than general collision. | 0.02 per episode |
 | **`cost_contamination`** — tasks contaminated by fire | Prevents the agent from letting items burn even if it improves robot survival. | 0.10 per episode |
-| **`cost_smoothness`** (optional) | For physical deployment: constrain the jerk and direction-flip penalty to a hard ceiling to protect hardware. Only meaningful if robots will run on real hardware. | Deployment-specific |
 
 The smoothness costs are optional constraints that only matter for hardware deployment; leave them as reward penalties for sim-only training.
 

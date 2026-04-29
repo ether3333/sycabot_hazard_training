@@ -2,6 +2,32 @@
 
 Multi-robot PPO environment for hazard-aware rescue in a lab maze. Robots navigate a fire-spreading environment, pick up task items, and deliver them to exits without being destroyed.
 
+## Installation
+
+**Requirements:** Python 3.10+
+
+```bash
+# Clone the repository
+git clone <repo-url>
+cd sycabot_hazard_training
+
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+
+# Runtime dependencies only
+pip install -r requirements.txt
+
+# Development dependencies (adds TensorBoard and Jupyter)
+pip install -r requirements-dev.txt
+```
+
+`requirements.txt` includes: `numpy`, `gymnasium`, `pygame`, `stable-baselines3[extra]`
+
+`requirements-dev.txt` adds: `tensorboard`, `jupyter`
+
+---
+
 ## Environment overview
 
 The environment is a bounded 2D workspace (`~3.1 m × 6.2 m`) with static wall obstacles and multiple exits. A stochastic cellular fire spreads from a random seed cell each episode. Robots start near exits and must pick up task items from the interior and deliver them before the fire destroys the items or the robots.
@@ -94,8 +120,8 @@ Include for each task the distance from the task to the nearest burning cell. Th
 **6. Normalized positions**
 All distances and coordinates should be normalized by the workspace dimensions or a fixed scale factor to keep inputs in a consistent range (e.g., [−1, 1]). This avoids gradient scaling issues and makes the policy more robust to arena size changes.
 
-**7. Action history**
-Including the previous one or two joint actions as part of the observation gives the policy explicit memory of recent motion, which can reduce the need to re-learn jerk avoidance from rewards alone and helps with partially observable dynamics.
+**7. Action history (current gap)**
+`prev_joint_action` and `prev_prev_joint_action` are stored in the environment state and used to compute the action-smoothness, turn-smoothness, jerk, and direction-flip penalties — but they are never included in the observation vector. This means the policy is penalized for motion it cannot observe. The fix is to append the previous joint action `[v₁, ω₁, ..., vₙ, ωₙ]` (and optionally the step before that) to the observation in `_build_observation()`, and increase `obs_dim` accordingly. Without this, the agent can only learn smoothness implicitly through reward shaping, which is much slower and less reliable.
 
 ---
 
