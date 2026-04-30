@@ -35,7 +35,7 @@ class RewardComponentTensorboardCallback(BaseCallback):
             self.delivery_vals.clear()
 
 
-CONTINUE_FROM_PREVIOUS = True
+CONTINUE_FROM_PREVIOUS = True # allows warm start (policy from previous training)
 
 
 env = SycaBotEnv(
@@ -49,7 +49,7 @@ env = SycaBotEnv(
 
 tensorboard_log = "./ppo_sycabot_tensorboard/"
 device = "cuda" if hasattr(env, "device") and env.device == "cuda" else "cpu"
-base_model_path = Path("ppo_sycabot.zip")
+base_model_path = Path("ppo_sycabot.zip") # rename to start from a specific file.
 
 if CONTINUE_FROM_PREVIOUS and base_model_path.exists():
     model = PPO.load(

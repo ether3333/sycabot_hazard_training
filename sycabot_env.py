@@ -9,7 +9,7 @@ from sycabot_render import SycaBotRenderer
 class SycaBotEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
-    def __init__(
+    def __init__( # parameters to deit
         self,
         render_mode=None,
         num_robots=2,
