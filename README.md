@@ -219,3 +219,7 @@ python3 PPO_training.py
    screen -r my_train
    ```
    Successfully get into the training terminal, to see the logs and processes.
+
+## Created Branches
+
+exp1 : Changed initial parameters
