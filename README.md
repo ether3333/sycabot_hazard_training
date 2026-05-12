@@ -43,7 +43,13 @@ The environment is a bounded 2D workspace (`~3.1 m × 6.2 m`) with static wall o
 
 The observation is a flat float32 vector of length `N_robots × 8 + N_tasks × 4 + grid_cells + 2`.
 
-### Robot block — 8 features per robot (ordered by robot index)
+### Robot block — 14 features per robot (ordered by robot index)
+
+5 basic robot values
++ 3 distance values
++ 6 obstacle values
+= 14
+
 
 | Feature | Description |
 |---------|-------------|
@@ -55,6 +61,9 @@ The observation is a flat float32 vector of length `N_robots × 8 + N_tasks × 4
 | `task_d` | Euclidean distance to the nearest pending task (meters) |
 | `exit_d` | Euclidean distance to the nearest exit point (meters) |
 | `fire_d` | Euclidean distance to the nearest burning grid cell center (meters) |
+|obs1_d, obs1_angle,
+    obs2_d, obs2_angle,
+    obs3_d, obs3_angle,|
 
 ### Task block — 4 features per task (ordered by task index)
 
