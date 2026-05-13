@@ -76,8 +76,8 @@ env = SycaBotEnv(
     fire_cell_size=0.08,
     pickup_reward = args.pickup_reward,
     delivery_reward = args.delivery_reward,
-    task_progress_weight = args.task_progress_weight,
-    exit_progress_weight = args.exit_progress_weight,
+    task_progress_reward_weight = args.task_progress_weight,
+    exit_progress_reward_weight = args.exit_progress_weight,
     failure_penalty = args.failure_penalty
 )
 
