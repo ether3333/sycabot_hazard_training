@@ -46,9 +46,9 @@ The observation is a flat float32 vector of length `N_robots × 8 + N_tasks × 4
 ### Robot block — 14 features per robot (ordered by robot index)
 
 5 basic robot values
-+ 3 distance values
++ 3 distance values + 3 observation values
 + 6 obstacle values
-= 14
+= 17
 
 
 | Feature | Description |
