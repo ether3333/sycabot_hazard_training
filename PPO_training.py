@@ -60,7 +60,7 @@ class RewardComponentTensorboardCallback(BaseCallback):
             self.delivery_vals.clear()
 
 
-CONTINUE_FROM_PREVIOUS = True # allows warm start (policy from previous training)
+CONTINUE_FROM_PREVIOUS = False # allows warm start (policy from previous training)
 
 args = parse_args()
 
@@ -101,19 +101,22 @@ else:
         device=device,
     )
 
+
+reward_str = f"pickup{args.pickup_reward}_delivery{args.delivery_reward}_taskprog{args.task_progress_weight}_exitprog{args.exit_progress_weight}_failure{args.failure_penalty}"
+run_name = f"{reward_str}"
+
 component_callback = RewardComponentTensorboardCallback()
 model.learn(
     total_timesteps=args.total_timesteps,
     progress_bar=True,
     callback=component_callback,
     reset_num_timesteps=not CONTINUE_FROM_PREVIOUS,
-    tb_log_name=args.run_name,
+    tb_log_name=run_name,
 )
 
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 model_dir = Path("models")
 model_dir.mkdir(exist_ok=True)
 
-model.save(model_dir / f"ppo_sycabot_{args.run_name}")
+model.save(model_dir / f"ppo_sycabot_{run_name}")
 
 # tensorboard --logdir ./ppo_sycabot_tensorboard/

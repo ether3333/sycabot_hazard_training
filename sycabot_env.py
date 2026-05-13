@@ -83,7 +83,7 @@ class SycaBotEnv(gym.Env):
         self.action_space = spaces.Box(low=action_low, high=action_high, dtype=np.float32)
 
         # Observation = robot block + task block + fire grid + global indicators
-        robot_feature_dim = 14
+        robot_feature_dim = 17
         task_feature_dim = 4
         obs_dim = (
             self.num_robots * robot_feature_dim
@@ -290,10 +290,12 @@ class SycaBotEnv(gym.Env):
             states[i, 2] = self.np_random.uniform(-np.pi, np.pi)
         return states
 
-    def _nearest_exit_distance(self, point):
+    def _nearest_exit(self, point):
         d = np.linalg.norm(self.exits - point, axis=1)
-        return float(np.min(d))
-
+        orientation =  np.arctan2(self.exits[:, 1] - point[1], self.exits[:, 0] - point[0])
+        min_idx = np.argmin(d)
+        return float(np.min(d)), orientation[min_idx]
+    
     def _nearest_visible_exit_distance(self, point):
         visible_distances = []
         for exit_point in self.exits:
@@ -303,12 +305,13 @@ class SycaBotEnv(gym.Env):
             return None
         return min(visible_distances)
 
-    def _nearest_task_distance(self, point):
+    def _nearest_task(self, point):
         pending_idx = np.where(self.task_status == 0)[0]
         if len(pending_idx) == 0:
-            return 0.0
+            return 0.0, 0.0
         d = np.linalg.norm(self.tasks[pending_idx] - point, axis=1)
-        return float(np.min(d))
+        orientation = np.arctan2(self.tasks[pending_idx, 1] - point[1], self.tasks[pending_idx, 0] - point[0])
+        return float(np.min(d)), orientation[np.argmin(d)]
 
     def _nearest_visible_task_distance(self, point):
         pending_idx = np.where(self.task_status == 0)[0]
@@ -323,13 +326,14 @@ class SycaBotEnv(gym.Env):
             return None
         return min(visible_distances)
 
-    def _nearest_fire_distance(self, point):
+    def _nearest_fire(self, point):
         burning = np.argwhere(self.fire_grid > 0)
         if len(burning) == 0:
-            return 10.0
+            return 10.0, 0.0
         fire_points = np.array([self._grid_to_world_center(gx, gy) for gx, gy in burning], dtype=np.float32)
         d = np.linalg.norm(fire_points - point, axis=1)
-        return float(np.min(d))
+        orientation = np.arctan2(fire_points[:, 1] - point[1], fire_points[:, 0] - point[0])
+        return float(np.min(d)), orientation[np.argmin(d)]
 
     def _spawn_fire(self):
         for _ in range(3000):
@@ -382,7 +386,8 @@ class SycaBotEnv(gym.Env):
             theta_new = self.wrap_angle(theta + w * self.dt)
 
             self.robot_states[i] = np.array([x_new, y_new, theta_new], dtype=np.float32)
-            if self._nearest_exit_distance(self.robot_states[i, :2]) > 0.28:
+            min_dist, min_orient = self._nearest_exit(self.robot_states[i, :2])
+            if min_dist > 0.28:
                 self.robot_departed_exit[i] = 1.0
 
     def _check_robot_failures(self):
@@ -502,7 +507,8 @@ class SycaBotEnv(gym.Env):
         for i in range(self.num_robots):
             if self.robot_alive[i] < 0.5 or self.robot_carrying[i] < 0.5:
                 continue
-            if self._nearest_exit_distance(self.robot_states[i, :2]) < 0.20:
+            exit_d, exit_orient = self._nearest_exit(self.robot_states[i, :2])
+            if exit_d < 0.20:
                 carried = np.where((self.task_status == 1) & (self.task_carrier == i))[0]
                 for tid in carried:
                     self.task_status[tid] = 2
@@ -566,16 +572,16 @@ class SycaBotEnv(gym.Env):
             x, y, th = self.robot_states[i]
             alive = self.robot_alive[i]
             carrying = self.robot_carrying[i]
-            task_d = self._nearest_task_distance(self.robot_states[i, :2])
-            exit_d = self._nearest_exit_distance(self.robot_states[i, :2])
-            fire_d = self._nearest_fire_distance(self.robot_states[i, :2])
+            task_d, task_orient = self._nearest_task(self.robot_states[i, :2])
+            exit_d, exit_orient = self._nearest_exit(self.robot_states[i, :2])
+            fire_d , fire_orient = self._nearest_fire(self.robot_states[i, :2])
             obstacle_features = self._closest_obstacle_features(self.robot_states[i], k=3)
 
             robot_features.extend(
                 [
                     x, y, th,
                     alive, carrying,
-                    task_d, exit_d, fire_d,
+                    task_d, task_orient, exit_d, exit_orient, fire_d, fire_orient,
                     *obstacle_features,
                 ]
             )
@@ -674,7 +680,7 @@ class SycaBotEnv(gym.Env):
         all_tasks_contaminated = bool(np.all(self.task_status == 3))
         all_robots_destroyed = np.all(self.robot_alive < 0.5)
 
-        d_all = np.array([self._nearest_exit_distance(self.robot_states[i, :2]) for i in range(self.num_robots)])
+        d_all = np.array([self._nearest_exit(self.robot_states[i, :2])[0] for i in range(self.num_robots)])
         all_robots_at_exit = bool(np.all(d_all < 0.20) and np.all(self.robot_departed_exit > 0.5))
 
         terminated = bool(all_tasks_contaminated or all_robots_destroyed or all_robots_at_exit)
