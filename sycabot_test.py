@@ -7,8 +7,8 @@ import os
 
 env = SycaBotEnv(
     render_mode="human", #visualize the trained model
-    num_robots=2,
-    num_tasks=2,
+    num_robots=1,
+    num_tasks=1,
     fire_spread_prob=0.02,
     fire_kill_prob=0.5,
     fire_cell_size=0.08,

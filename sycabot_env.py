@@ -12,8 +12,8 @@ class SycaBotEnv(gym.Env):
     def __init__( # #default values (fixed)
         self,
         render_mode=None,
-        num_robots=1, 
-        num_tasks=1,
+        num_robots=2, 
+        num_tasks=2,
         max_steps=200,
         fire_spread_prob=0.020,
         fire_kill_prob=0.2,
@@ -28,6 +28,7 @@ class SycaBotEnv(gym.Env):
         boundary_death_penalty=2.0,
         task_progress_reward_weight=2.0,
         exit_progress_reward_weight=2.0,
+        failure_penalty=30.0,
         environment_config=None,
         renderer=None,
     ):
@@ -69,6 +70,7 @@ class SycaBotEnv(gym.Env):
         self.boundary_death_penalty = float(boundary_death_penalty)
         self.task_progress_reward_weight = float(task_progress_reward_weight)
         self.exit_progress_reward_weight = float(exit_progress_reward_weight)
+        self.failure_penalty = float(failure_penalty)
 
         # Environment geometry
         self.obstacles = environment_config["obstacles"]
@@ -659,7 +661,7 @@ class SycaBotEnv(gym.Env):
         reward += -0.01
 
         if all_robot_failure:
-            reward = -200.0
+            reward = -self.failure_penalty
             pickup_reward_component = 0.0
             delivery_reward_component = 0.0
             progress_reward_component = 0.0

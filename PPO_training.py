@@ -24,6 +24,7 @@ def parse_args():
 
     parser.add_argument("--task-progress-weight", type=float, default=20.0)
     parser.add_argument("--exit-progress-weight", type=float, default=20.0)
+    parser.add_argument("--failure-penalty", type=float, default=30.0)
 
     parser.add_argument("--total-timesteps", type=int, default=20000)
 
@@ -67,12 +68,17 @@ if args.run_name is None:
     args.run_name = datetime.now().strftime("ppo_sycabot_%Y%m%d_%H%M%S")
 
 env = SycaBotEnv(
-    render_mode=None, #no needto visualize during training
+    render_mode=None, #no need to visualize during training
     num_robots=1,
     num_tasks=1,
     fire_spread_prob=0.02,
     fire_kill_prob=0.2,
     fire_cell_size=0.08,
+    pickup_reward = args.pickup_reward,
+    delivery_reward = args.delivery_reward,
+    task_progress_weight = args.task_progress_weight,
+    exit_progress_weight = args.exit_progress_weight,
+    failure_penalty = args.failure_penalty
 )
 
 tensorboard_log = "./ppo_sycabot_tensorboard/"
