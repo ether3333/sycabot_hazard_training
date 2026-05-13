@@ -9,25 +9,25 @@ from sycabot_render import SycaBotRenderer
 class SycaBotEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
-    def __init__( # parameters to deit
+    def __init__( # #default values (fixed)
         self,
         render_mode=None,
-        num_robots=2,
-        num_tasks=2,
-        max_steps=1000,
+        num_robots=1, 
+        num_tasks=1,
+        max_steps=200,
         fire_spread_prob=0.020,
         fire_kill_prob=0.2,
         fire_cell_size=0.08,
         robot_radius=0.08,
-        pickup_reward=1000.0,
-        delivery_reward=1000.0,
+        pickup_reward=100.0,
+        delivery_reward=100.0,
         smooth_action_weight=0.30,
         turn_smooth_weight=0.20,
         jerk_weight=0.08,
         direction_flip_weight=0.10,
-        boundary_death_penalty=20.0,
-        task_progress_reward_weight=20.0,
-        exit_progress_reward_weight=20.0,
+        boundary_death_penalty=2.0,
+        task_progress_reward_weight=2.0,
+        exit_progress_reward_weight=2.0,
         environment_config=None,
         renderer=None,
     ):
@@ -81,7 +81,7 @@ class SycaBotEnv(gym.Env):
         self.action_space = spaces.Box(low=action_low, high=action_high, dtype=np.float32)
 
         # Observation = robot block + task block + fire grid + global indicators
-        robot_feature_dim = 8
+        robot_feature_dim = 14
         task_feature_dim = 4
         obs_dim = (
             self.num_robots * robot_feature_dim
@@ -148,6 +148,51 @@ class SycaBotEnv(gym.Env):
         t = np.clip(np.dot(p - a, ab) / denom, 0.0, 1.0)
         proj = a + t * ab
         return float(np.linalg.norm(p - proj))
+
+    # defined to compare three distances from obstacle
+    def _closest_obstacle_features(self, robot_state, k=3):
+        robot_pos = robot_state[:2]
+        robot_theta = robot_state[2]
+
+        features = []
+
+        for obstacle in self.obstacles:
+            start = np.array(obstacle[0], dtype=np.float32)
+            end = np.array(obstacle[1], dtype=np.float32)
+
+            obstacle_vec = end - start
+            robot_vec = robot_pos - start
+
+            denom = np.dot(obstacle_vec, obstacle_vec)
+
+            if denom <= 1e-9:
+                closest_point = start
+            else:
+                proj = np.dot(robot_vec, obstacle_vec) / denom
+                proj = np.clip(proj, 0.0, 1.0)
+                closest_point = start + proj * obstacle_vec
+
+            distance = float(np.linalg.norm(robot_pos - closest_point))
+
+            angle_to_obstacle = np.arctan2(
+                closest_point[1] - robot_pos[1],
+                closest_point[0] - robot_pos[0],
+            )
+
+            orientation = self.wrap_angle(angle_to_obstacle - robot_theta)
+
+            features.append((distance, orientation))
+
+        features.sort(key=lambda item: item[0])
+
+        result = []
+        for distance, orientation in features[:k]:
+            result.extend([distance, orientation])
+
+        while len(result) < 2 * k:
+            result.extend([10.0, 0.0])
+
+        return result
 
     def _orientation(self, a, b, c):
         return float((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
@@ -522,7 +567,16 @@ class SycaBotEnv(gym.Env):
             task_d = self._nearest_task_distance(self.robot_states[i, :2])
             exit_d = self._nearest_exit_distance(self.robot_states[i, :2])
             fire_d = self._nearest_fire_distance(self.robot_states[i, :2])
-            robot_features.extend([x, y, th, alive, carrying, task_d, exit_d, fire_d])
+            obstacle_features = self._closest_obstacle_features(self.robot_states[i], k=3)
+
+            robot_features.extend(
+                [
+                    x, y, th,
+                    alive, carrying,
+                    task_d, exit_d, fire_d,
+                    *obstacle_features,
+                ]
+            )
 
         task_features = []
         for i in range(self.num_tasks):
